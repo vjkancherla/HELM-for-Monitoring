@@ -1,0 +1,12 @@
+ backend:
+  persistence:
+    size: 100Mi
+  replicas: 1
+read:
+  persistence:
+    size: 50Mi
+  replicas: 1
+write:
+  persistence:
+    size: 50Mi
+  replicas: 1

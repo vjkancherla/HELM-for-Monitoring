@@ -1,0 +1,84 @@
+Helm Commands:
+
+Using the installation of Prometheus as an Example
+	
+- Adding a Repo
+	- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+	
+
+- Listing the charts in a Repo
+	- helm search repo prometheus-community
+	
+
+- Installing a chart 
+	- helm install my-prometheus \
+		prometheus-community/kube-prometheus-stack \
+		--namespace monitoring \
+		--set grafana.enabled=false
+	 
+	 : --set flag is used to override helm chart's default values
+	 : You can use the --set flag multiple times to specify multiple overrides if needed
+	 
+	 - helm install my-loki \
+		grafana/loki-stack \
+		--namespace monitoring \
+		-f values-files/loki-values.yaml
+	
+	: "-f" allows you to specify values in a YAML file
+	
+
+- Upgrading a existing release
+	- helm upgrade my-prometheus \                                                                                   
+		prometheus-community/kube-prometheus-stack \
+		--namespace monitoring \
+		-f values-files/prometheus-values.yaml
+	 
+
+- Listing releases
+	- helm list -A (all releases in all namespaces)
+	- helm list -n monitoring (only list releases in monitoring namespace)
+	
+
+- Get the status of a Release
+	- helm status my-prometheus -n monitoring
+	
+	
+- Get ALL the K8s Manifests created by the helm release
+	- helm get mainfest my-prometheus -n monitoring
+	
+
+- Get ALL the K8s Manifests created and ALL the values used for the release
+	- helm get all my-prometheus -n monitoring
+	
+
+- Generate all the templates locally without actually installing or upgrading a release
+	- helm template my-prometheus \
+	   prometheus-community/kube-prometheus-stack \
+	   -n monitoring \
+	   --set grafana.enabled=false
+	   
+
+- Using --debug flag
+	- Helm will display detailed debugging information as the release is installed or upgraded.
+	
+
+- Using --dry-run flag
+	- The --dry-run flag is used to simulate the installation or upgrade of a Helm release without actually performing the operation. 
+	  This flag is helpful when you want to see what changes would be made to the cluster's state without making any changes.
+	  
+EXAMPLE of using --debug and --dry-run flag together to gather more information or simulate changes without affecting the cluster's actual state
+	- helm upgrade my-prometheus \
+		prometheus-community/kube-prometheus-stack \
+		--namespace monitoring \
+		--set grafana.enabled=false \
+		--debug --dry-run
+	
+	
+- Get all the versions of a given Release
+	- helm history my-prometheus -n monitoring
+
+
+How does helm track and store info about releases so that it can rollback on demand?
+	- Helm persists release metadata in Secrets (default) or ConfigMaps, stored in the Kubernetes cluster. 
+	Every time your release changes, it appends that to the existing data. 
+	This provides Helm with the capability to rollback to a previous release.

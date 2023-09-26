@@ -1,0 +1,86 @@
+==============
+PROMETHEUS
+==============
+>> helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+
+>> k create ns monitoring
+
+>> helm install my-prometheus \
+prometheus-community/kube-prometheus-stack \
+--namespace monitoring \
+-f values-files/prometheus-values.yaml
+
+IMPORTANT:
+    - If the values for the following properties are not set:
+        - prometheus.prometheusSpec.serviceMonitorSelector.matchLabels
+        - prometheus.prometheusSpec.podMonitorSelector.matchLabels
+    
+    By default, Helm sets Promethues chart's values to:
+        - prometheus.prometheusSpec.serviceMonitorSelector.matchLabels="release: my-prometheus"
+        - prometheus.prometheusSpec.podMonitorSelector.matchLabels="release: my-prometheus"
+   
+    - The above settings allow the "my-prometheus" Promethues release/deployment to detect and srape metrics from 
+      all ServiceMonitor Objects that have the LABEL "release: my-prometheus", 
+      and all PodMonitor objects that have the LABEL "release: my-prometheus"
+
+    - The Prometheus chart creates the following serviceMonitor objects by deafult, all Prometheus to scrape metrics:
+        my-prometheus-kube-prometh-coredns                   4h11m
+        my-prometheus-kube-prometh-kube-scheduler            4h11m
+        my-prometheus-kube-prometh-prometheus                4h11m
+        my-prometheus-kube-prometh-kube-etcd                 4h11m
+        my-prometheus-kube-prometh-alertmanager              4h11m
+        my-prometheus-kube-prometh-kubelet                   4h11m
+        my-prometheus-kube-prometh-kube-proxy                4h11m
+        my-prometheus-kube-prometh-operator                  4h11m
+        my-prometheus-kube-prometh-apiserver                 4h11m
+        my-prometheus-kube-prometh-kube-controller-manager   4h11m
+
+
+>> k port-forward -n monitoring svc/my-prometheus-kube-prometh-prometheus 9090:9090
+
+>> In the console, go to Status > Target and confirm that see "targets" there (corresponding to the servicemonitors above)
+
+
+===================================
+LOKI [Log Aggregation System]. Uses PromTail as logs-loader
+====================================
+>> helm repo add grafana https://grafana.github.io/helm-charts
+
+>> helm install my-loki \
+grafana/loki-stack \
+--namespace monitoring \
+-f values-files/loki-values.yaml
+
+
+======================================
+GRAFANA
+======================================
+>> helm repo add grafana https://grafana.github.io/helm-charts
+
+>> helm install my-grafana \
+grafana/grafana \
+--namespace monitoring \
+-f values-files/grafana-values.yaml
+
+>> k port-forward -n monitoring svc/my-grafana 3000:80
+
+Get token
+>> kubectl get secret --namespace monitoring my-grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo
+
+Login using admin/token
+
+Use this link to search for logs in Loki:
+https://grafana.com/blog/2023/04/12/how-to-collect-and-query-kubernetes-logs-with-grafana-loki-grafana-and-grafana-agent/
+
+Load kubernetes dashboard
+    - Go to Dashboards > General > Cluster Monitoring for Kubernetes
+
+
+==============================
+RUN EXAMPLE APP
+==============================
+>> helm install my-example-app ./Example-App/example-app-chart
+
+>> Explore the example app's logs in Grafana
+    >> goto Home > Explore 
+    >> Label Filters: "namespace = staging"
