@@ -1,0 +1,211 @@
+=======================================================
+CANARY DEPLOYMENTS WITH ARGO-ROLLOUTS
+=======================================================
+
+=========================
+INSTALL ARGO ROLLOUTS
+=========================
+>> k create ns argo
+
+>> helm repo add argo https://argoproj.github.io/argo-helm
+
+>> helm install my-argo-rollouts-release \
+argo/argo-rollouts \
+--namespace argo \
+--set dashboard.enabled=true
+
+>> k port-forward -n argo service/my-argo-rollouts-release-dashboard 31000:3100
+
+Install Argo Rollouts Plugin
+>> brew install argoproj/tap/kubectl-argo-rollouts
+
+
+=============================
+BLUE-GREEN DEPLOYMENT DEMO
+=============================
+!!! https://github.com/argoproj/argo-rollouts/blob/master/examples/rollout-bluegreen.yaml !!!
+
+[1] First we deploy a Custom Rollout resource, and two Kubernetes Services targeting that Rollout.
+
+A Rollout resource is very similar to a Deployment resource. 
+
+Our Rollout resource is defined with the BLUE-GREEN STRATEGY
+===
+strategy:
+    blueGreen: 
+        # activeService specifies the service to update with the new template hash at time of promotion.
+        # This field is mandatory for the blueGreen update strategy.
+      activeService: rollout-bluegreen-active
+        
+        # previewService specifies the service to update with the new template hash before promotion.
+        # This allows the preview stack to be reachable without serving production traffic.
+        # This field is optional.
+      previewService: rollout-bluegreen-preview
+        
+        # autoPromotionEnabled disables automated promotion of the new stack by pausing the rollout
+        # immediately before the promotion. If omitted, the default behavior is to promote the new
+        # stack as soon as the ReplicaSet are completely ready/available.
+        # Rollouts can be resumed using: `kubectl argo rollouts promote ROLLOUT`
+      autoPromotionEnabled: false
+===
+
+Create the resources:
+>> k create -f BlueGreen-Demo/
+
+WHAT ARGO DOES NOW IS:
+    1. it creates a replicaset to spin up the required Pods for the RollOut resource
+    2. when creating the Pods, it will add the follow lable:
+        - rollouts-pod-template-hash=5ffd47b8d4 (The hash refers to the ReplicaSet's hash)
+    3. it updates the K8s Service (rollout-bluegreen-active) defined for "activeService" property 
+       and adds the same label as above to "Selector"
+        - rollouts-pod-template-hash=5ffd47b8d4
+    4. rollout-bluegreen-active service now points to the pods from the new replicaset
+
+
+[2] Watching/Monitoring the Rollouts 
+
+The Argo Rollouts kubectl plugin allows you to visualize the Rollout, its related resources 
+(ReplicaSets, Pods, AnalysisRuns), and presents live state changes as they occur. 
+To watch the rollout as it deploys, run the get rollout --watch command from plugin:
+
+>> kubectl argo rollouts get rollout rollouts-demo --watch
+
+Or explore the ArgoRollout console
+
+======
+>> kubectl argo rollouts get rollout rollout-bluegreen                                                             1:08
+
+Name:            rollout-bluegreen
+Namespace:       default
+Status:          ✔ Healthy
+Strategy:        BlueGreen
+Images:          argoproj/rollouts-demo:blue (stable, active)
+Replicas:
+  Desired:       3
+  Current:       3
+  Updated:       3
+  Ready:         3
+  Available:     3
+
+NAME                                           KIND        STATUS     AGE   INFO
+⟳ rollout-bluegreen                            Rollout     ✔ Healthy  101s
+└──# revision:1
+   └──⧉ rollout-bluegreen-5ffd47b8d4           ReplicaSet  ✔ Healthy  81s   stable,active
+      ├──□ rollout-bluegreen-5ffd47b8d4-ckv8d  Pod         ✔ Running  80s   ready:1/1
+      ├──□ rollout-bluegreen-5ffd47b8d4-ljbmb  Pod         ✔ Running  80s   ready:1/1
+      └──□ rollout-bluegreen-5ffd47b8d4-sdmxf  Pod         ✔ Running  80s   ready:1/1
+======
+
+Note that the "revision:1" is marked as "STABLE" version. Which means it is the verison that is being served to clients.
+
+
+[3] Updating the Rollout Resource and triggering a Blue-Green release
+
+Update the image in Canary-Demo/rollout.yaml: From argoproj/rollouts-demo:blue to argoproj/rollouts-demo:yellow
+
+Then,
+
+>> k apply -f BlueGreen-Demo/rollout.yaml
+
+Examine the rollout status:
+
+==========
+kubectl argo rollouts get rollout rollout-bluegreen                                                             1:19
+
+Name:            rollout-bluegreen
+Namespace:       default
+Status:          ॥ Paused
+Message:         BlueGreenPause
+Strategy:        BlueGreen
+Images:          argoproj/rollouts-demo:blue (stable, active)
+                 argoproj/rollouts-demo:yellow (preview)
+Replicas:
+  Desired:       3
+  Current:       6
+  Updated:       3
+  Ready:         3
+  Available:     3
+
+NAME                                           KIND        STATUS     AGE  INFO
+⟳ rollout-bluegreen                            Rollout     ॥ Paused   12m
+├──# revision:2
+│  └──⧉ rollout-bluegreen-674b45d9b4           ReplicaSet  ✔ Healthy  48s  preview
+│     ├──□ rollout-bluegreen-674b45d9b4-gnj4n  Pod         ✔ Running  48s  ready:1/1
+│     ├──□ rollout-bluegreen-674b45d9b4-jnmkm  Pod         ✔ Running  48s  ready:1/1
+│     └──□ rollout-bluegreen-674b45d9b4-wvbt5  Pod         ✔ Running  48s  ready:1/1
+└──# revision:1
+   └──⧉ rollout-bluegreen-5ffd47b8d4           ReplicaSet  ✔ Healthy  11m  stable,active
+      ├──□ rollout-bluegreen-5ffd47b8d4-ckv8d  Pod         ✔ Running  11m  ready:1/1
+      ├──□ rollout-bluegreen-5ffd47b8d4-ljbmb  Pod         ✔ Running  11m  ready:1/1
+      └──□ rollout-bluegreen-5ffd47b8d4-sdmxf  Pod         ✔ Running  11m  ready:1/1
+==========
+
+Note that the "revision:1" is marked as "STABLE" version. Which means it is the verison that is being served to clients.
+And "revision:2" is marked as "PREVIEW" version, not processing any traffic.
+
+WHAT ARGO DOES NOW IS:
+    1. it creates a NEW replicaset to spin up the required Pods for the RollOut resource with the updated Manifest
+    2. when creating the Pods, it will add the follow lable:
+        - rollouts-pod-template-hash=674b45d9b4 (The hash refers to the ReplicaSet's hash)
+    3. it updates the K8s Service (rollout-bluegreen-preview) defined for "previewService" property and adds the same label as above to "Selector"
+        - rollouts-pod-template-hash=674b45d9b4
+    4. Now, rollout-bluegreen-preview service points to the pods from the new replicaset
+
+    You can now access/use the K8s Service - rollout-bluegreen-preview - for testing
+
+
+[4] Promoting the release
+The rollout is now in a paused state. When a Rollout reaches a pause step with no duration, 
+it will remain in a paused state indefinitely until it is resumed/promoted. 
+To manually promote a rollout to the next step, run the promote command of the plugin:
+
+>> kubectl argo rollouts promote rollout-bluegreen
+
+Watch the progression of the BlueGreen Rollout 
+>> kubectl argo rollouts get rollout rollout-bluegreen --watch
+
+===
+>> kubectl argo rollouts get rollout rollout-bluegreen                                                             1:38
+
+Name:            rollout-bluegreen
+Namespace:       default
+Status:          ✔ Healthy
+Strategy:        BlueGreen
+Images:          argoproj/rollouts-demo:yellow (stable, active)
+Replicas:
+  Desired:       3
+  Current:       3
+  Updated:       3
+  Ready:         3
+  Available:     3
+
+NAME                                           KIND        STATUS        AGE  INFO
+⟳ rollout-bluegreen                            Rollout     ✔ Healthy     30m
+├──# revision:2
+│  └──⧉ rollout-bluegreen-674b45d9b4           ReplicaSet  ✔ Healthy     18m  stable,active
+│     ├──□ rollout-bluegreen-674b45d9b4-gnj4n  Pod         ✔ Running     18m  ready:1/1
+│     ├──□ rollout-bluegreen-674b45d9b4-jnmkm  Pod         ✔ Running     18m  ready:1/1
+│     └──□ rollout-bluegreen-674b45d9b4-wvbt5  Pod         ✔ Running     18m  ready:1/1
+└──# revision:1
+   └──⧉ rollout-bluegreen-5ffd47b8d4           ReplicaSet  • ScaledDown  29m
+===
+
+WHAT ARGO DOES NOW IS:
+    1. it updates the K8s Service (rollout-bluegreen-active) defined for "activeService" property 
+       and updates the "Selector" as follows: 
+       removes label: rollouts-pod-template-hash=5ffd47b8d4
+       adds label: rollouts-pod-template-hash=674b45d9b4
+    2. Now, both activeService and previewService are pointing to the same set of pods.
+    3. Scales down the original replicaset to "0"
+
+
+============================
+Performing a RollBack
+============================
+1. Change the Rollout manifest to reflect the desired/rollback state (change image back to what it was)
+
+2. Run kubectl apply
+
+3. Argo will 
+    - create a NEW Revision with the rolledback version of the mainfest
+    - performs a BLUE-GREEN release as described previously

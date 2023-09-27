@@ -1,0 +1,235 @@
+=======================================================
+CANARY DEPLOYMENTS WITH ARGO-ROLLOUTS
+=======================================================
+
+=========================
+INSTALL ARGO ROLLOUTS
+=========================
+>> k create ns argo
+
+>> helm repo add argo https://argoproj.github.io/argo-helm
+
+>> helm install my-argo-rollouts-release \
+argo/argo-rollouts \
+--namespace argo \
+--set dashboard.enabled=true
+
+>> k port-forward -n argo service/my-argo-rollouts-release-dashboard 31000:3100
+
+Install Argo Rollouts Plugin
+>> brew install argoproj/tap/kubectl-argo-rollouts
+
+
+=========================
+CANARY DEPLOYMENT DEMO
+=========================
+!!! https://argo-rollouts.readthedocs.io/en/stable/getting-started/ !!!
+
+[1] First we deploy a Custom Rollout resource, and a Kubernetes Service targeting that Rollout.
+
+A Rollout resource is very similar to a Deployment resource. 
+
+Our Rollout resource is defined with the CANARY STRATEGY
+==
+strategy:
+    canary:
+      steps:
+      - setWeight: 20
+      - pause: {} <--- Pause indefinitely
+      - setWeight: 40
+      - pause: {duration: 10} <--- Pause 10 secs
+      - setWeight: 60
+      - pause: {duration: 10} <--- Pause 10 secs
+      - setWeight: 80
+      - pause: {duration: 10} <--- Pause 10 secs
+==
+
+Original Rollout manifest: https://raw.githubusercontent.com/argoproj/argo-rollouts/master/docs/getting-started/basic/rollout.yaml
+
+The example Rollout (Canary-Demo/rollout.yaml) in the demo utilizes a canary update strategy which 
+1. sends 20% of traffic to the canary, 
+2. followed by a manual promotion, 
+3. finally gradual automated traffic increases for the remainder of the upgrade. 
+This behavior is described in the following portion of the Rollout spec.
+
+create the resources:
+>> k create -f Canary-Demo/
+
+
+WHAT ARGO DOES NOW IS:
+    1. it creates a replicaset to spin up the required Pods for the RollOut resource
+
+
+[2] Watching/Monitoring the Rollouts 
+
+The Argo Rollouts kubectl plugin allows you to visualize the Rollout, its related resources 
+(ReplicaSets, Pods, AnalysisRuns), and presents live state changes as they occur. 
+To watch the rollout as it deploys, run the get rollout --watch command from plugin:
+
+>> kubectl argo rollouts get rollout rollouts-demo --watch
+
+Or explore the ArgoRollout console
+
+=======
+>> kubectl argo rollouts get rollout rollouts-demo                                                              
+
+Name:            rollouts-demo
+Namespace:       default
+Status:          ✔ Healthy
+Strategy:        Canary
+  Step:          8/8
+  SetWeight:     100
+  ActualWeight:  100
+Images:          argoproj/rollouts-demo:blue (stable)
+Replicas:
+  Desired:       5
+  Current:       5
+  Updated:       5
+  Ready:         5
+  Available:     5
+
+NAME                                       KIND        STATUS     AGE  INFO
+⟳ rollouts-demo                            Rollout     ✔ Healthy  23m
+└──# revision:1
+   └──⧉ rollouts-demo-79fcfb5fd9           ReplicaSet  ✔ Healthy  23m  stable
+      ├──□ rollouts-demo-79fcfb5fd9-2t7sm  Pod         ✔ Running  23m  ready:1/1
+      ├──□ rollouts-demo-79fcfb5fd9-6cz9s  Pod         ✔ Running  23m  ready:1/1
+      ├──□ rollouts-demo-79fcfb5fd9-m6h4v  Pod         ✔ Running  23m  ready:1/1
+      ├──□ rollouts-demo-79fcfb5fd9-rq96j  Pod         ✔ Running  23m  ready:1/1
+      └──□ rollouts-demo-79fcfb5fd9-zpszw  Pod         ✔ Running  23m  ready:1/1
+========
+Note that the "revision:1" is marked as "STABLE" version. Which means it is the verison that is being served to clients.
+
+
+[3] Updating the Rollout Resource and triggering a Canary release
+Just as with Deployments, any change to the Pod template field (spec.template) results in a new version (i.e. ReplicaSet) to be deployed
+
+Update the image in Canary-Demo/rollout.yaml: From argoproj/rollouts-demo:blue to argoproj/rollouts-demo:yellow
+
+Then,
+
+>> k apply -f Canary-Demo/rollout.yaml
+
+Examine the rollout status:
+
+==========
+>> kubectl argo rollouts get rollout rollouts-demo                                                                22:27
+
+Name:            rollouts-demo
+Namespace:       default
+Status:          ॥ Paused
+Message:         CanaryPauseStep
+Strategy:        Canary
+  Step:          1/8
+  SetWeight:     20
+  ActualWeight:  20
+Images:          argoproj/rollouts-demo:blue (stable)
+                 argoproj/rollouts-demo:yellow (canary)
+Replicas:
+  Desired:       5
+  Current:       5
+  Updated:       1
+  Ready:         5
+  Available:     5
+
+NAME                                       KIND        STATUS     AGE    INFO
+⟳ rollouts-demo                            Rollout     ॥ Paused   34m
+├──# revision:2
+│  └──⧉ rollouts-demo-6495f64cd9           ReplicaSet  ✔ Healthy  3m22s  canary
+│     └──□ rollouts-demo-6495f64cd9-j4v4g  Pod         ✔ Running  3m22s  ready:1/1
+└──# revision:1
+   └──⧉ rollouts-demo-79fcfb5fd9           ReplicaSet  ✔ Healthy  34m    stable
+      ├──□ rollouts-demo-79fcfb5fd9-2t7sm  Pod         ✔ Running  34m    ready:1/1
+      ├──□ rollouts-demo-79fcfb5fd9-6cz9s  Pod         ✔ Running  34m    ready:1/1
+      ├──□ rollouts-demo-79fcfb5fd9-m6h4v  Pod         ✔ Running  34m    ready:1/1
+      └──□ rollouts-demo-79fcfb5fd9-rq96j  Pod         ✔ Running  34m    ready:1/1
+==========
+
+Note that the "revision:1" is marked as "STABLE" version. Which means it is the verison that is being served to clients.
+And "revision:2" is marked as "CANARY" version, processing 20% of the traffic.
+
+During a rollout update, the controller will progress through the steps defined in the Rollout's update strategy.
+The example rollout sets a 20% traffic weight to the canary, and pauses the rollout indefinitely until user action 
+is taken to unpause/promote the rollout
+
+WHAT ARGO DOES NOW IS:
+    1. it creates a NEW replicaset to spin up the required Pods for the RollOut resource with the updated Manifest
+    2. scales up the new replicaset to have 20% (i.e. 1 replica) of the over all capacity (5 replicas)
+    3. scales down the old replaset to have 80% (i.e 4 replicas) of the over all capacity (5 replicas)
+
+
+[4] Promoting a Rollout
+The rollout is now in a paused state. When a Rollout reaches a pause step with no duration, 
+it will remain in a paused state indefinitely until it is resumed/promoted. 
+To manually promote a rollout to the next step, run the promote command of the plugin:
+
+>> kubectl argo rollouts promote rollouts-demo
+
+Watch the progression of the Canary Rollout 
+>> kubectl argo rollouts get rollout rollouts-demo --watch
+
+After promotion, Rollout will proceed to execute the remaining steps. 
+The remaining rollout steps in our example are fully automated, so the Rollout will 
+eventually complete steps until it has has fully transitioned to the new version.
+
+===========
+>> kubectl argo rollouts get rollout rollouts-demo                                                                22:56
+
+Name:            rollouts-demo
+Namespace:       default
+Status:          ✔ Healthy
+Strategy:        Canary
+  Step:          8/8
+  SetWeight:     100
+  ActualWeight:  100
+Images:          argoproj/rollouts-demo:yellow (stable)
+Replicas:
+  Desired:       5
+  Current:       5
+  Updated:       5
+  Ready:         5
+  Available:     5
+
+NAME                                       KIND        STATUS        AGE   INFO
+⟳ rollouts-demo                            Rollout     ✔ Healthy     166m
+├──# revision:2
+│  └──⧉ rollouts-demo-6495f64cd9           ReplicaSet  ✔ Healthy     135m  stable
+│     ├──□ rollouts-demo-6495f64cd9-j4v4g  Pod         ✔ Running     135m  ready:1/1
+│     ├──□ rollouts-demo-6495f64cd9-7k5bd  Pod         ✔ Running     112m  ready:1/1
+│     ├──□ rollouts-demo-6495f64cd9-44dst  Pod         ✔ Running     112m  ready:1/1
+│     ├──□ rollouts-demo-6495f64cd9-4jp8l  Pod         ✔ Running     112m  ready:1/1
+│     └──□ rollouts-demo-6495f64cd9-brszx  Pod         ✔ Running     112m  ready:1/1
+└──# revision:1
+   └──⧉ rollouts-demo-79fcfb5fd9           ReplicaSet  • ScaledDown  166m
+===========
+
+WHAT ARGO DOES NOW IS:
+  1. it scales up the New replicset gradually - 1, 2, 3, 4, 5 replicas
+  2. it scales down the Old replicset gradually - 4, 3, 2, 1, 0 replicas
+
+
+====================
+ABORTING A ROLLOUT
+=====================
+In the prevous example, after Canary has started and 20% traffic is now to going Canary deployment,
+if you were to, instead of "Promoting" the release, "Abort" it instead,
+Argo will scale up the "stable" version of the ReplicaSet (in this case the yellow image), and scale down any other versions.
+
+Although the stable version of the ReplicaSet may be running and is healthy, 
+the overall rollout is still considered Degraded, since the desired version is not the version which is actually running.
+
+In order to make Rollout considered Healthy again and not Degraded, 
+it is necessary to change the desired state back to the previous, stable version. 
+This typically involves running kubectl apply after changing the Rollout resource back to the original.
+
+
+============================
+Performing a RollBack
+============================
+1. Change the Rollout manifest to reflect the desired/rollback state (change image back to what it was)
+
+2. Run kubectl apply
+
+3. Argo will 
+    - create a NEW Revision with the rolledback version of the mainfest
+    - performs a Canary release as described previously
